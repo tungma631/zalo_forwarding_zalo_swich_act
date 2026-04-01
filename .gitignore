@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-electron/
+.env
+qr.png
+*.exe
+*.AppImage
+*.dmg
+userData/
