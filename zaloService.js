@@ -6,12 +6,12 @@ const path = require('path');
 const { sendPhotoWithExistingIds } = require('./forwarderUtils');
 
 class ZaloManager extends EventEmitter {
-    constructor(userDataPath) { 
+    constructor(userDataPath) {
         super();
         this.api = null;
-        
+
         // Sử dụng đường dẫn từ AppData để có quyền ghi khi build .exe
-        this.basePath = userDataPath; 
+        this.basePath = userDataPath;
         this.credentialsPath = path.join(this.basePath, 'credentials.json');
         this.configPath = path.join(this.basePath, 'config.json');
         this.cookiePath = path.join(this.basePath, 'cookies.json');
@@ -24,15 +24,18 @@ class ZaloManager extends EventEmitter {
         });
 
         this.masterQueue = {};
-        this.groupNames = {}; 
-        this.globalQueue = []; 
+        this.groupNames = {};
+
+        // Khởi tạo trạng thái Hệ thống Bắt đầu/Tương tác
+        this.isRunning = false;
+        this.globalQueue = [];
         this.isProcessingGlobalQueue = false;
 
         // Tải cấu hình từ AppData
         this.config = { SOURCE_GROUP_IDS: [], DESTINATION_GROUP_IDS: [] };
         if (fs.existsSync(this.configPath)) {
-            try { 
-                this.config = JSON.parse(fs.readFileSync(this.configPath, 'utf8')); 
+            try {
+                this.config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
             } catch (e) {
                 console.error("Lỗi đọc config:", e);
             }
@@ -45,6 +48,7 @@ class ZaloManager extends EventEmitter {
     }
 
     saveConfig(sourceIds, destIds) {
+        this.clearAllQueues(); // Đổ sạch bộ đệm trước khi áp dụng Cấu hình mới
         this.config.SOURCE_GROUP_IDS = sourceIds || [];
         this.config.DESTINATION_GROUP_IDS = destIds || [];
         fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
@@ -53,7 +57,7 @@ class ZaloManager extends EventEmitter {
 
     async getGroups(forceRefresh = false) {
         if (!this.api) return [];
-        
+
         if (!forceRefresh && fs.existsSync(this.groupsPath)) {
             try {
                 const cachedGroups = JSON.parse(fs.readFileSync(this.groupsPath, 'utf8'));
@@ -94,6 +98,7 @@ class ZaloManager extends EventEmitter {
     }
 
     async logout() {
+        this.clearAllQueues();
         if (fs.existsSync(this.credentialsPath)) fs.unlinkSync(this.credentialsPath);
         if (fs.existsSync(this.cookiePath)) fs.unlinkSync(this.cookiePath);
         this.api = null;
@@ -121,7 +126,7 @@ class ZaloManager extends EventEmitter {
         return false;
     }
 
-// Tìm hàm generateNewQR trong zaloService.js và thay thế bằng đoạn này:
+    // Tìm hàm generateNewQR trong zaloService.js và thay thế bằng đoạn này:
     async generateNewQR() {
         try {
             // Xóa file QR cũ nếu có
@@ -142,7 +147,7 @@ class ZaloManager extends EventEmitter {
                         // Đọc file và chuyển sang Base64
                         const imageBuffer = fs.readFileSync(targetPath);
                         const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-                        
+
                         this.emit('qr_ready', base64Image); // Gửi chuỗi Base64 thay vì path
                         this.log("=> Đã tìm thấy mã QR. Vui lòng quét!");
                         clearInterval(qrCheckInterval);
@@ -155,12 +160,12 @@ class ZaloManager extends EventEmitter {
 
             // Timeout an toàn: Nếu 2 phút chưa sinh được QR, giải phóng bộ nhớ.
             timeoutId = setTimeout(() => {
-                 clearInterval(qrCheckInterval);
+                clearInterval(qrCheckInterval);
             }, 120000);
 
             this.log("=> Đang yêu cầu mã QR từ Zalo...");
             this.api = await this.zalo.loginQR();
-            
+
             clearInterval(qrCheckInterval);
 
             const ctx = this.api.getContext();
@@ -171,14 +176,14 @@ class ZaloManager extends EventEmitter {
                 language: ctx.language
             };
             fs.writeFileSync(this.credentialsPath, JSON.stringify(credentialsToSave, null, 2));
-            
+
             this.emit('login_success');
             this.startListener();
             return true;
 
         } catch (err) {
             this.log("=> Mã QR đã hết hạn hoặc có lỗi. Vui lòng bấm tạo mã mới!");
-            return false; 
+            return false;
         }
     }
 
@@ -186,6 +191,8 @@ class ZaloManager extends EventEmitter {
         if (!this.api) return;
 
         this.api.listener.on("message", (message) => {
+            if (!this.isRunning) return; // Máy dừng thì tai điếc
+
             const threadId = String(message.threadId);
 
             if (this.config.SOURCE_GROUP_IDS.includes(threadId)) {
@@ -216,7 +223,7 @@ class ZaloManager extends EventEmitter {
                             if (paramsObj.hd) imgUrl = paramsObj.hd;
                             if (paramsObj.photoId) photoId = paramsObj.photoId;
                             if (paramsObj.hdSize) hdSize = paramsObj.hdSize;
-                        } catch (e) {}
+                        } catch (e) { }
                     }
                     if (imgUrl && imgUrl.startsWith("http")) {
                         const promise = fetch(imgUrl)
@@ -230,9 +237,9 @@ class ZaloManager extends EventEmitter {
                                 return null;
                             });
 
-                        this.masterQueue[threadId].items.push({ 
-                            type: 'photo', 
-                            promise, 
+                        this.masterQueue[threadId].items.push({
+                            type: 'photo',
+                            promise,
                             timestamp,
                             photoId: photoId,
                             normalUrl: content.href,
@@ -246,10 +253,10 @@ class ZaloManager extends EventEmitter {
 
                 if (inserted) {
                     this.log(`=> Đã tiếp nhận tin nhắn. Chờ 60 giây tĩnh lặng...`);
-                    
+
                     // Nếu đây là tin nhắn bắt đầu một chuỗi mới
                     if (this.masterQueue[threadId].items.length === 1) {
-                         this.masterQueue[threadId].sessionStartTime = Date.now();
+                        this.masterQueue[threadId].sessionStartTime = Date.now();
                     }
 
                     if (this.masterQueue[threadId].timer) clearTimeout(this.masterQueue[threadId].timer);
@@ -267,7 +274,7 @@ class ZaloManager extends EventEmitter {
                     };
 
                     const isTextMsg = typeof content === "string";
-                    
+
                     // Tính thời lượng từ lúc tin đầu tiên của cụm đổ vào
                     const sessionStart = this.masterQueue[threadId].sessionStartTime || Date.now();
                     const elapsed = Date.now() - sessionStart;
@@ -280,7 +287,7 @@ class ZaloManager extends EventEmitter {
                         // Trạng thái bình thường: Chờ 60 giây yên tĩnh mới chốt
                         this.masterQueue[threadId].timer = setTimeout(() => {
                             triggerFlush();
-                        }, 60000); 
+                        }, 60000);
                     }
                 }
             }
@@ -306,9 +313,9 @@ class ZaloManager extends EventEmitter {
 
             const flushPhotos = async () => {
                 if (currentPhotos.length === 0) return;
-                
+
                 this.log(`=> Đang xử lý ${currentPhotos.length} ảnh...`);
-                
+
                 const buffers = (await Promise.all(currentPhotos.map(p => p.promise))).filter(b => b !== null);
                 if (buffers.length === 0) {
                     currentPhotos = [];
@@ -321,25 +328,25 @@ class ZaloManager extends EventEmitter {
                         const dims = imageSize(buffer);
                         attachmentsArray.push({
                             data: buffer,
-                            filename: `img_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`,
+                            filename: `img_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`,
                             metadata: { totalSize: buffer.length, width: dims.width || 1080, height: dims.height || 1080 }
                         });
-                    } catch (e) {}
+                    } catch (e) { }
                 }
                 if (attachmentsArray.length === 0) {
                     currentPhotos = [];
                     return;
                 }
-                
+
                 let reusedIds = [];
                 try {
                     const firstDestId = this.config.DESTINATION_GROUP_IDS[0] || this.config.SOURCE_GROUP_IDS[0];
                     const CHUNK_SIZE = 4;
                     for (let c = 0; c < attachmentsArray.length; c += CHUNK_SIZE) {
                         const chunkArr = attachmentsArray.slice(c, c + CHUNK_SIZE);
-                        
+
                         const uploadResp = await this.api.uploadAttachment(chunkArr, firstDestId, ThreadType.Group);
-                        
+
                         if (uploadResp && uploadResp.length > 0) {
                             const ids = uploadResp.map(att => ({
                                 fileType: 'image',
@@ -353,13 +360,13 @@ class ZaloManager extends EventEmitter {
                             }));
                             reusedIds.push(...ids);
                         }
-                        
+
                         if (c + CHUNK_SIZE < attachmentsArray.length) {
-                             await new Promise(r => setTimeout(r, 2000));
+                            await new Promise(r => setTimeout(r, 2000));
                         }
                     }
                     this.log(`=> Đã chuẩn bị xong ảnh.`);
-                } catch(uploadErr) {
+                } catch (uploadErr) {
                     this.log(`=> Lỗi xử lý ảnh: ${uploadErr.message}`);
                 }
 
@@ -374,13 +381,13 @@ class ZaloManager extends EventEmitter {
                             await this.api.sendMessage({ msg: "", attachments: attachmentsArray }, destId, ThreadType.Group);
                             this.log(`=> Đã gửi ảnh tới nhóm [${destId}]`);
                         }
-                        
+
                         await new Promise(r => setTimeout(r, 1500));
                     } catch (e) {
-                         this.log(`=> Lỗi gửi ảnh tới nhóm [${destId}]: ${e.message}`);
+                        this.log(`=> Lỗi gửi ảnh tới nhóm [${destId}]: ${e.message}`);
                     }
                 }
-                
+
                 currentPhotos = [];
             };
 
@@ -392,12 +399,12 @@ class ZaloManager extends EventEmitter {
                     currentPhotos.push(item);
                     lastPhotoTimestamp = item.timestamp;
                 } else if (item.type === 'text') {
-                    await flushPhotos(); 
+                    await flushPhotos();
                     for (const destId of this.config.DESTINATION_GROUP_IDS) {
                         try {
-                           await this.api.sendMessage(item.data, destId, ThreadType.Group);
-                           await new Promise(r => setTimeout(r, 1000));
-                        } catch(ex) { this.log(`=> Lỗi gửi chữ nhóm [${destId}]: ${ex.message}`) }
+                            await this.api.sendMessage(item.data, destId, ThreadType.Group);
+                            await new Promise(r => setTimeout(r, 1000));
+                        } catch (ex) { this.log(`=> Lỗi gửi chữ nhóm [${destId}]: ${ex.message}`) }
                     }
                     this.log(`=> Đã gửi văn bản thành công.`);
                 }
@@ -405,6 +412,29 @@ class ZaloManager extends EventEmitter {
             await flushPhotos();
         }
         this.isProcessingGlobalQueue = false;
+    }
+
+    toggleStatus(isEnabled) {
+        this.isRunning = isEnabled;
+        if (!isEnabled) {
+            this.clearAllQueues();
+            this.log("=> 🛑 ĐÃ TẠM DỪNG");
+        } else {
+            this.log("=> ▶️ ĐÃ BẮT ĐẦU");
+        }
+        return this.isRunning;
+    }
+
+    clearAllQueues() {
+        for (const threadId in this.masterQueue) {
+            if (this.masterQueue[threadId].timer) {
+                clearTimeout(this.masterQueue[threadId].timer);
+            }
+        }
+        this.masterQueue = {};
+        this.globalQueue = [];
+        this.isProcessingGlobalQueue = false;
+        this.log("=> [Hệ thống] Bộ nhớ Cache đã được giải phóng hoàn toàn.");
     }
 }
 

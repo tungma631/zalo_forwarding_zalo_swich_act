@@ -109,6 +109,7 @@ body {
     border-radius: 50%;
 }
 .status-indicator.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+.status-indicator.offline { background: #6b7280; box-shadow: 0 0 10px #6b7280; }
 
 .content {
     flex: 1;
@@ -252,6 +253,8 @@ body {
 .btn.primary:hover { background: var(--accent-hover); box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
 .btn.danger { background: var(--danger); color: white; }
 .btn.danger:hover { background: var(--danger-hover); box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+.btn.success { background: var(--success); color: white; }
+.btn.success:hover { background: #059669; box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); }
 .btn.text-btn { background: transparent; color: var(--text-secondary); padding: 5px 10px; }
 .btn.text-btn:hover { color: white; }
 

@@ -9,6 +9,8 @@ const ui = {
     btnSave: document.getElementById('btn-save'),
     btnSyncGroups: document.getElementById('btn-sync-groups'),
     btnGenerateQR: document.getElementById('btn-generate-qr'),
+    btnToggleStatus: document.getElementById('btn-toggle-status'),
+    topStatusIndicator: document.getElementById('top-status-indicator'),
     saveStatus: document.getElementById('save-status'),
     unsavedWarning: document.getElementById('unsaved-warning'),
     
@@ -107,7 +109,8 @@ window.zaloAPI.onQRFailed(() => {
     ui.loginLoader.style.display = 'none';
     ui.qrImg.style.display = 'none';
     ui.btnGenerateQR.style.display = 'block';
-    ui.loginStatus.innerText = "Mã QR gặp lỗi hoặc hết hạn. Vui lòng bấm Tạo mã mới.";
+    ui.btnGenerateQR.innerText = 'Lấy lại mã QR';
+    ui.loginStatus.innerText = "Mã QR gặp lỗi hoặc hết hạn. Vui lòng bấm Lấy lại mã.";
 });
 
 window.zaloAPI.onLoginSuccess(() => {
@@ -144,6 +147,29 @@ async function showMainView() {
     ui.loginView.style.display = 'none';
     ui.mainView.style.display = 'flex';
     await loadGroups(false); // Mặc định không force để dùng cache
+
+    // Khởi tạo trạng thái Mặc định: Tạm Dừng (False) để chờ xác nhận
+    let isRunning = false;
+    window.zaloAPI.toggleStatus(isRunning);
+    updateStatusBtn(isRunning);
+
+    ui.btnToggleStatus.addEventListener('click', async () => {
+        isRunning = !isRunning;
+        await window.zaloAPI.toggleStatus(isRunning);
+        updateStatusBtn(isRunning);
+    });
+}
+
+function updateStatusBtn(isRunning) {
+    if (isRunning) {
+        ui.btnToggleStatus.className = 'btn danger';
+        ui.btnToggleStatus.innerText = '⏸ Tạm Dừng';
+        ui.topStatusIndicator.className = 'status-indicator online';
+    } else {
+        ui.btnToggleStatus.className = 'btn success';
+        ui.btnToggleStatus.innerText = '▶ Bắt Đầu';
+        ui.topStatusIndicator.className = 'status-indicator offline';
+    }
 }
 
 ui.btnSyncGroups.addEventListener('click', async () => {

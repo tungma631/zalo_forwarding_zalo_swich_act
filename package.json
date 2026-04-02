@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron . --no-sandbox",
+    "start": "electron .",
     "build": "electron-builder"
   },
   "dependencies": {
@@ -22,7 +22,9 @@
       "output": "dist"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Utility",
       "executableName": "zalo-forward-pro"
     },

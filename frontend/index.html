@@ -18,7 +18,7 @@
                 <img id="qr-img" src="" alt="QR Code" style="display: none;">
             </div>
             <div class="loader" id="login-loader"></div>
-            <button id="btn-generate-qr" class="btn primary" style="margin-top: 15px; display: none;">Tạo/Làm mới mã QR</button>
+            <button id="btn-generate-qr" class="btn primary" style="margin-top: 15px; display: none;">Lấy lại mã QR</button>
         </div>
     </div>
 
@@ -27,9 +27,12 @@
         <header class="glass-header">
             <div class="brand">
                 <h1>Zalo Forwarding Pro</h1>
-                <span class="status-indicator online"></span>
+                <span class="status-indicator" id="top-status-indicator"></span>
             </div>
-            <button id="btn-logout" class="btn danger">Đăng xuất</button>
+            <div style="display: flex; gap: 10px;">
+                <button id="btn-toggle-status" class="btn success">▶ Bắt Đầu</button>
+                <button id="btn-logout" class="btn danger">Đăng xuất</button>
+            </div>
         </header>
 
         <div class="content">

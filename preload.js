@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('zaloAPI', {
     generateQR: () => ipcRenderer.invoke('zalo-generate-qr'),
     getConfig: () => ipcRenderer.invoke('zalo-get-config'),
     saveConfig: (sourceIds, destIds) => ipcRenderer.invoke('zalo-save-config', sourceIds, destIds),
+    toggleStatus: (isEnabled) => ipcRenderer.invoke('zalo-toggle-status', isEnabled),
 
     // Listeners
     onLog: (callback) => ipcRenderer.on('zalo-log', (event, msg) => callback(msg)),

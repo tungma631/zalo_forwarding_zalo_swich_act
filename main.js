@@ -60,24 +60,24 @@ app.whenReady().then(() => {
     // --- Lắng nghe các sự kiện từ ZaloService ---
 
     zaloManager.on('log', (message) => {
-        if (mainWindow) mainWindow.webContents.send('zalo-log', message);
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-log', message);
     });
 
     zaloManager.on('qr_ready', (qrPath) => {
-        if (mainWindow) mainWindow.webContents.send('zalo-qr', qrPath);
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-qr', qrPath);
     });
 
     zaloManager.on('login_success', () => {
-        if (mainWindow) mainWindow.webContents.send('zalo-login-success');
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-login-success');
     });
 
     zaloManager.on('logged_out', () => {
-        if (mainWindow) mainWindow.webContents.send('zalo-logged-out');
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-logged-out');
     });
 
     // Xử lý khi QR hết hạn (ZCA-JS ném lỗi hoặc timeout)
     zaloManager.on('qr_expired', async () => {
-        if (mainWindow) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('zalo-log', "⚠️ Mã QR đã hết hạn. Vui lòng bấm tạo mã mới.");
             // UI sẽ gọi zalo-generate-qr khi user bấm vào nút TẠO LẠI QR
             mainWindow.webContents.send('zalo-qr-failed');
@@ -113,6 +113,17 @@ app.whenReady().then(() => {
 
     ipcMain.handle('zalo-save-config', (event, sourceIds, destIds) => {
         zaloManager.saveConfig(sourceIds, destIds);
+    });
+
+    ipcMain.handle('zalo-toggle-status', (event, isEnabled) => {
+        return zaloManager.toggleStatus(isEnabled);
+    });
+
+    app.on('before-quit', () => {
+        if (zaloManager) {
+            zaloManager.clearAllQueues();
+            console.log("Đã dọn dẹp RAM trước khi thoát ứng dụng.");
+        }
     });
 
     app.on('activate', () => {
