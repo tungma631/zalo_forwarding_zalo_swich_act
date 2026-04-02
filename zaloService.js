@@ -58,6 +58,12 @@ class ZaloManager extends EventEmitter {
     async getGroups(forceRefresh = false) {
         if (!this.api) return [];
 
+        if (forceRefresh) {
+            // Nuke on Sync: Xoá trệt Hộ khẩu Nhóm cũ
+            if (fs.existsSync(this.groupsPath)) fs.unlinkSync(this.groupsPath);
+            this.groupNames = {};
+        }
+
         if (!forceRefresh && fs.existsSync(this.groupsPath)) {
             try {
                 const cachedGroups = JSON.parse(fs.readFileSync(this.groupsPath, 'utf8'));
@@ -101,6 +107,13 @@ class ZaloManager extends EventEmitter {
         this.clearAllQueues();
         if (fs.existsSync(this.credentialsPath)) fs.unlinkSync(this.credentialsPath);
         if (fs.existsSync(this.cookiePath)) fs.unlinkSync(this.cookiePath);
+        
+        // Nuke on Logout: Xoá trắng Lịch sử Cấu hình & Danh bạ
+        if (fs.existsSync(this.configPath)) fs.unlinkSync(this.configPath);
+        if (fs.existsSync(this.groupsPath)) fs.unlinkSync(this.groupsPath);
+        this.config = { SOURCE_GROUP_IDS: [], DESTINATION_GROUP_IDS: [] };
+        this.groupNames = {};
+
         this.api = null;
         this.log("=> Đã đăng xuất và xóa phiên làm việc.");
         this.emit('logged_out');
