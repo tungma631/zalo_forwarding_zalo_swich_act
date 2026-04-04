@@ -1,16 +1,25 @@
 const ui = {
-    loginView: document.getElementById('login-view'),
     mainView: document.getElementById('main-view'),
+    
+    // Account Manager
+    accountList: document.getElementById('account-grid'),
+    btnAddAccount: document.getElementById('btn-add-account'),
+
+    // Modal QR
+    qrModal: document.getElementById('qr-modal'),
+    btnCloseModal: document.getElementById('btn-close-modal'),
     qrImg: document.getElementById('qr-img'),
     loginStatus: document.getElementById('login-status'),
     loginLoader: document.getElementById('login-loader'),
-    
-    btnLogout: document.getElementById('btn-logout'),
-    btnSave: document.getElementById('btn-save'),
-    btnSyncGroups: document.getElementById('btn-sync-groups'),
     btnGenerateQR: document.getElementById('btn-generate-qr'),
+    
+    // Top Bar
     btnToggleStatus: document.getElementById('btn-toggle-status'),
     topStatusIndicator: document.getElementById('top-status-indicator'),
+    
+    // Config Panel
+    btnSave: document.getElementById('btn-save'),
+    btnSyncGroups: document.getElementById('btn-sync-groups'),
     saveStatus: document.getElementById('save-status'),
     unsavedWarning: document.getElementById('unsaved-warning'),
     
@@ -27,12 +36,31 @@ const ui = {
     btnUnselectAllDest: document.getElementById('btn-unselect-all-dest'),
     
     logWindow: document.getElementById('log-window'),
-    btnClearLog: document.getElementById('btn-clear-log')
+    btnClearLog: document.getElementById('btn-clear-log'),
+    
+    // Tabs
+    tabBtns: document.querySelectorAll('.tab-btn'),
+    tabContents: document.querySelectorAll('.tab-content')
 };
 
 let allGroups = [];
 let sourceSelection = new Set();
 let destSelection = new Set();
+let currentQRAccountId = null; // Account ID đang chờ QR
+
+// --- TABS LOGIC ---
+ui.tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        // Remove active class from all buttons and contents
+        ui.tabBtns.forEach(b => b.classList.remove('active'));
+        ui.tabContents.forEach(c => c.classList.remove('active'));
+        
+        // Add active class to clicked button and target content
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-tab');
+        document.getElementById(targetId).classList.add('active');
+    });
+});
 
 function showErrorToast(msg) {
     const toast = document.createElement('div');
@@ -44,7 +72,7 @@ function showErrorToast(msg) {
     toast.style.color = 'white';
     toast.style.padding = '12px 24px';
     toast.style.borderRadius = '8px';
-    toast.style.zIndex = '9999';
+    toast.style.zIndex = '99999';
     toast.style.boxShadow = '0 8px 24px rgba(239, 68, 68, 0.4)';
     toast.style.fontWeight = 'bold';
     toast.style.transition = '0.3s';
@@ -59,11 +87,17 @@ function showErrorToast(msg) {
 }
 
 // --- LOGGING ---
-function appendLog(msg) {
+function appendLog(data) {
+    const div = document.createElement('div');
     const time = new Date().toLocaleTimeString('vi-VN');
-    const line = document.createElement('div');
-    line.innerHTML = `<span class="time">[${time}]</span> ${msg}`;
-    ui.logWindow.appendChild(line);
+    div.innerHTML = `<span class="time">[${time}]</span> ${data}`;
+    ui.logWindow.appendChild(div);
+    
+    // Max 300 logs items
+    while (ui.logWindow.children.length > 300) {
+        ui.logWindow.removeChild(ui.logWindow.firstChild);
+    }
+    
     ui.logWindow.scrollTop = ui.logWindow.scrollHeight;
 }
 
@@ -75,84 +109,197 @@ window.zaloAPI.onLog((msg) => {
     appendLog(msg);
 });
 
-// --- AUTHENTICATION ---
-async function startAuth() {
-    ui.loginStatus.innerText = "Đang kiểm tra kết nối bí mật...";
-    const success = await window.zaloAPI.login();
-    if (success) {
-        showMainView();
-    } else {
-        ui.loginStatus.innerText = "Chưa có phiên đăng nhập. Vui lòng bấm tạo mã QR.";
-        ui.loginLoader.style.display = 'none';
-        ui.btnGenerateQR.style.display = 'block';
+// --- ACCOUNT MANAGER ---
+function renderAccounts(accounts) {
+    ui.accountList.innerHTML = '';
+    
+    if (accounts.length === 0) {
+        ui.accountList.innerHTML = '<div style="padding: 15px; text-align:center; color: #6b7280; font-size: 13px;">Chưa có tài khoản nào. Bấm [+] để thêm.</div>';
+        return;
     }
+
+    accounts.forEach(acc => {
+        const item = document.createElement('div');
+        item.className = 'account-card';
+
+        // Trạng thái icon
+        let statusText = "Mất phiên / Offline";
+        let statusColorClass = "";
+        if (acc.hasCredentials) {
+            statusText = "IDLE";
+            if (acc.status === 'active') { statusText = "ACTIVE"; statusColorClass = "active"; }
+            else if (acc.status === 'prewarming') { statusText = "PRE-WARM"; statusColorClass = "prewarming"; }
+            else if (acc.status === 'stopping') { statusText = "STOPPING"; statusColorClass = "stopping"; }
+        }
+
+        // Action Buttons
+        let mainActionHtml = '';
+        if (acc.hasCredentials) {
+            mainActionHtml = `<button class="btn outline btn-logout-acc" data-id="${acc.id}" style="color:var(--danger); border-color:var(--danger)">🚪 Đăng xuất</button>`;
+        } else {
+            mainActionHtml = `<button class="btn success btn-login-acc" data-id="${acc.id}">📍 Quét QR Đăng nhập</button>`;
+        }
+
+        const displayName = acc.name.startsWith('acc_') ? "Slot: " + acc.id.split('_')[1] : acc.name;
+        const initial = displayName.charAt(0).toUpperCase();
+
+        item.innerHTML = `
+            <div class="acc-header">
+                <div class="acc-info">
+                    <div class="acc-avatar">${initial}</div>
+                    <div>
+                        <div class="acc-name">${displayName}</div>
+                        <div class="acc-slot">${acc.id}</div>
+                    </div>
+                </div>
+                <div class="acc-status-badge ${statusColorClass}">
+                    <div class="status-dot"></div>
+                    ${statusText}
+                </div>
+            </div>
+            
+            <div style="font-size: 13px; color: var(--text-secondary); margin-top: 5px;">Proxy:</div>
+            <div class="proxy-box">
+                <input type="text" placeholder="HTTP/SOCKS (VD: http://ip:port)" value="${acc.proxy || ''}" class="proxy-input inp-proxy" data-id="${acc.id}">
+                <button class="btn primary btn-save-proxy" data-id="${acc.id}">Lưu</button>
+            </div>
+            
+            <div class="acc-actions">
+                ${mainActionHtml}
+                <button class="btn danger btn-delete-acc" data-id="${acc.id}" title="Xoá Account">🗑️ Xoá Khe</button>
+            </div>
+        `;
+
+        ui.accountList.appendChild(item);
+    });
+
+    // Bắt sự kiện
+    document.querySelectorAll('.btn-delete-acc').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const id = e.target.getAttribute('data-id');
+            if(confirm("Xoá sạch dữ liệu tài khoản này?")) {
+                await window.zaloAPI.deleteAccount(id);
+            }
+        });
+    });
+
+    document.querySelectorAll('.btn-logout-acc').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const id = e.target.getAttribute('data-id');
+            if(confirm("Đăng xuất và xoá dữ liệu cookies tài khoản này?")) {
+                await window.zaloAPI.logout(id);
+            }
+        });
+    });
+
+    document.querySelectorAll('.btn-save-proxy').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const id = e.target.getAttribute('data-id');
+            const inp = document.querySelector(`.inp-proxy[data-id="${id}"]`);
+            await window.zaloAPI.saveProxy(id, inp.value.trim());
+            alert("Đã lưu Proxy!");
+        });
+    });
+
+    document.querySelectorAll('.btn-login-acc').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const id = e.target.getAttribute('data-id');
+            openQRModal(id);
+        });
+    });
 }
 
-ui.btnGenerateQR.addEventListener('click', async () => {
-    ui.btnGenerateQR.style.display = 'none';
-    ui.loginLoader.style.display = 'block';
-    ui.loginStatus.innerText = "Đang yêu cầu mã QR từ Zalo. Vui lòng đợi...";
-    await window.zaloAPI.generateQR();
+window.zaloAPI.onUpdateAccounts(accounts => renderAccounts(accounts));
+
+ui.btnAddAccount.addEventListener('click', async () => {
+    const newId = await window.zaloAPI.createAccount();
+    appendLog(`Đã khởi tạo slot tài khoản mới: ${newId}`);
+    // Tự động mở QR luôn?
+    // Mặc định thì createAccount sẽ gen ra slot, user cần tự bấm QUÉT QR
 });
 
-window.zaloAPI.onQR((base64Data) => {
+// --- AUTHENTICATION (Modal) ---
+function openQRModal(accountId) {
+    currentQRAccountId = accountId;
+    ui.qrModal.style.display = 'flex';
+    ui.qrImg.style.display = 'none';
+    ui.loginLoader.style.display = 'none';
+    ui.btnGenerateQR.style.display = 'block';
+    ui.loginStatus.innerText = "Nhấn Lấy Mã QR để bắt đầu lấy mã từ máy chủ Zalo.";
+}
+
+ui.btnCloseModal.addEventListener('click', () => {
+    ui.qrModal.style.display = 'none';
+    currentQRAccountId = null;
+});
+
+ui.btnGenerateQR.addEventListener('click', async () => {
+    if (!currentQRAccountId) return;
+    ui.btnGenerateQR.style.display = 'none';
+    ui.loginLoader.style.display = 'block';
+    ui.loginStatus.innerText = "Đang yêu cầu mã QR từ Zalo. Vui lòng đợi trong giây lát...";
+    await window.zaloAPI.generateQR(currentQRAccountId);
+});
+
+window.zaloAPI.onQR((data) => {
+    if (data.accountId !== currentQRAccountId) return; // Ignore if it's for another account
     ui.loginLoader.style.display = 'none';
     ui.qrImg.style.display = 'block';
-    
-    // Gán trực tiếp chuỗi Base64 vào ảnh
-    ui.qrImg.src = base64Data; 
-    
+    ui.qrImg.src = data.qr; 
     ui.loginStatus.innerText = "Vui lòng quét mã QR để bắt đầu!";
 });
 
-window.zaloAPI.onQRFailed(() => {
+window.zaloAPI.onQRFailed((accountId) => {
+    if (accountId !== currentQRAccountId) return;
     ui.loginLoader.style.display = 'none';
     ui.qrImg.style.display = 'none';
     ui.btnGenerateQR.style.display = 'block';
-    ui.btnGenerateQR.innerText = 'Lấy lại mã QR';
     ui.loginStatus.innerText = "Mã QR gặp lỗi hoặc hết hạn. Vui lòng bấm Lấy lại mã.";
 });
 
-window.zaloAPI.onLoginSuccess(() => {
-    showMainView();
-});
-
-window.zaloAPI.onLoggedOut(() => {
-    window.location.reload();
-});
-
-ui.btnLogout.addEventListener('click', () => {
-    if(confirm("Bạn có chắc chắn muốn đăng xuất?")) {
-        window.zaloAPI.logout();
+window.zaloAPI.onLoginSuccess((accountId) => {
+    if (accountId === currentQRAccountId) {
+        ui.qrModal.style.display = 'none';
+        currentQRAccountId = null;
+        showErrorToast(`Đăng nhập thành công!`);
     }
 });
 
-// --- MAIN VIEW & GROUP LISTING ---
+window.zaloAPI.onLoggedOut((accountId) => {
+    showErrorToast(`Account [${accountId}] đã đăng xuất.`);
+});
+
+
+// --- INIT SYSTEM ---
 async function loadGroups(force = false) {
-    if (force) appendLog("Đang đồng bộ danh sách nhóm từ Zalo (Rate Limit Risk), vui lòng chờ...");
-    else appendLog("Đang tải danh sách nhóm từ bộ nhớ Cache cục bộ...");
-    
+    if (force) {
+        sourceSelection.clear();
+        destSelection.clear();
+        ui.sourceList.innerHTML = '<div style="padding:15px; color:#6b7280; font-size:13px; text-align:center;">Đang lấy dữ liệu...</div>';
+        ui.destList.innerHTML = '<div style="padding:15px; color:#6b7280; font-size:13px; text-align:center;">Đang lấy dữ liệu...</div>';
+    }
+
     const config = await window.zaloAPI.getConfig();
-    if (config.SOURCE_GROUP_IDS) config.SOURCE_GROUP_IDS.forEach(id => sourceSelection.add(id));
-    if (config.DESTINATION_GROUP_IDS) config.DESTINATION_GROUP_IDS.forEach(id => destSelection.add(id));
+    if (config.SOURCE_GROUP_NAMES) config.SOURCE_GROUP_NAMES.forEach(name => sourceSelection.add(name));
+    if (config.DESTINATION_GROUP_NAMES) config.DESTINATION_GROUP_NAMES.forEach(name => destSelection.add(name));
     
-    // Yêu cầu getGroups kèm cờ force
+    // Yêu cầu getGroups kèm cờ force (để trả về list name)
     allGroups = await window.zaloAPI.getGroups(force);
     
     renderList(allGroups, sourceSelection, ui.sourceList, ui.sourceCount, 'source');
     renderList(allGroups, destSelection, ui.destList, ui.destCount, 'dest');
 }
 
-async function showMainView() {
-    ui.loginView.style.display = 'none';
-    ui.mainView.style.display = 'flex';
-    await loadGroups(false); // Mặc định không force để dùng cache
+async function bootSystem() {
+    const accounts = await window.zaloAPI.getAccounts();
+    renderAccounts(accounts);
+    
+    // Thử fetch initial account to init group list
+    // Không force fetch để lấy cache
+    await loadGroups(false);
 
-    // Khởi tạo trạng thái Mặc định: Tạm Dừng (False) để chờ xác nhận
     let isRunning = false;
-    window.zaloAPI.toggleStatus(isRunning);
-    updateStatusBtn(isRunning);
-
+    
     ui.btnToggleStatus.addEventListener('click', async () => {
         isRunning = !isRunning;
         await window.zaloAPI.toggleStatus(isRunning);
@@ -162,12 +309,12 @@ async function showMainView() {
 
 function updateStatusBtn(isRunning) {
     if (isRunning) {
-        ui.btnToggleStatus.className = 'btn danger';
-        ui.btnToggleStatus.innerText = '⏸ Tạm Dừng';
+        ui.btnToggleStatus.className = 'btn danger giant-btn';
+        ui.btnToggleStatus.innerText = '⏸ DỪNG HỆ THỐNG GỬI TIN BÁN TỰ ĐỘNG';
         ui.topStatusIndicator.className = 'status-indicator online';
     } else {
-        ui.btnToggleStatus.className = 'btn success';
-        ui.btnToggleStatus.innerText = '▶ Bắt Đầu';
+        ui.btnToggleStatus.className = 'btn success giant-btn';
+        ui.btnToggleStatus.innerText = '▶ KHỞI ĐỘNG HỆ THỐNG GỬI TIN BÁN TỰ ĐỘNG';
         ui.topStatusIndicator.className = 'status-indicator offline';
     }
 }
@@ -176,7 +323,7 @@ ui.btnSyncGroups.addEventListener('click', async () => {
     ui.btnSyncGroups.disabled = true;
     ui.btnSyncGroups.innerText = "Đang đồng bộ...";
     await loadGroups(true);
-    ui.btnSyncGroups.innerText = "⬇️ Đồng bộ Nhóm từ Zalo";
+    ui.btnSyncGroups.innerText = "⬇️ Lọc Đồng Bộ Nhóm Chung";
     ui.btnSyncGroups.disabled = false;
 });
 
@@ -197,17 +344,29 @@ function sortListDom(container, selectionSet) {
         return textA.localeCompare(textB, 'vi');
     });
     
-    // Yêu cầu DOM render lại mảng theo vị trí mới
     items.forEach(item => container.appendChild(item));
 }
 
 function renderList(groups, selectionSet, container, countDisplay, type) {
     container.innerHTML = '';
     
-    // Sort array: Selected first, then alphabetically
+    if (!groups || groups.length === 0) {
+        selectionSet.clear(); 
+        countDisplay.innerText = "0";
+        return;
+    }
+
+    // Bộ lọc: Nếu config cũ có Group Name mà giờ không giao nhau nữa, ta xoá nó
+    const validNames = new Set(groups.map(g => g.name));
+    for (const selectedName of selectionSet) {
+        if (!validNames.has(selectedName)) {
+            selectionSet.delete(selectedName);
+        }
+    }
+
     const sortedGroups = [...groups].sort((a, b) => {
-        const aSelected = selectionSet.has(a.id);
-        const bSelected = selectionSet.has(b.id);
+        const aSelected = selectionSet.has(a.name);
+        const bSelected = selectionSet.has(b.name);
         if (aSelected && !bSelected) return -1;
         if (!aSelected && bSelected) return 1;
         return a.name.localeCompare(b.name, 'vi');
@@ -219,30 +378,29 @@ function renderList(groups, selectionSet, container, countDisplay, type) {
         
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.value = group.id;
-        checkbox.checked = selectionSet.has(group.id);
+        checkbox.value = group.name; // Use name as value
+        checkbox.checked = selectionSet.has(group.name);
         
         checkbox.addEventListener('change', (e) => {
             if (e.target.checked) {
-                if (type === 'source' && destSelection.has(group.id)) {
+                if (type === 'source' && destSelection.has(group.name)) {
                     showErrorToast("Nhóm này đã được chọn ở cột Đích. Không thể chọn trùng!");
                     e.target.checked = false;
                     return;
                 }
-                if (type === 'dest' && sourceSelection.has(group.id)) {
+                if (type === 'dest' && sourceSelection.has(group.name)) {
                     showErrorToast("Nhóm này đã được chọn ở cột Nguồn. Không thể chọn trùng!");
                     e.target.checked = false;
                     return;
                 }
-                selectionSet.add(group.id);
+                selectionSet.add(group.name);
             } else {
-                selectionSet.delete(group.id);
+                selectionSet.delete(group.name);
             }
             
             countDisplay.innerText = selectionSet.size;
             ui.unsavedWarning.style.display = 'inline-block';
             
-            // Xếp lại ngay sau khi tick/bỏ tick
             sortListDom(container, selectionSet);
         });
 
@@ -283,10 +441,8 @@ ui.btnSave.addEventListener('click', async () => {
     
     await window.zaloAPI.saveConfig(srcArray, destArray);
     
-    // Ẩn cảnh báo
     ui.unsavedWarning.style.display = 'none';
-
-    ui.saveStatus.innerText = "Cấu hình đã được lưu thành công!";
+    ui.saveStatus.innerText = "Cấu hình Toàn Cầu đã được lưu!";
     ui.saveStatus.style.opacity = 1;
     setTimeout(() => { ui.saveStatus.style.opacity = 0; }, 3000);
 });
@@ -353,4 +509,4 @@ ui.btnSelectAllDest.addEventListener('click', () => handleSelectAll('dest-list',
 ui.btnUnselectAllDest.addEventListener('click', () => handleUnselectAll('dest-list', destSelection, 'dest'));
 
 // START
-startAuth();
+bootSystem();

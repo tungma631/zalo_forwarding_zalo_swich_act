@@ -4,41 +4,91 @@ const { imageSize } = require('image-size');
 const EventEmitter = require('events');
 const path = require('path');
 const { sendPhotoWithExistingIds } = require('./forwarderUtils');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const fetch = require('node-fetch'); // Yêu cầu bản 2.x
 
 class ZaloManager extends EventEmitter {
-    constructor(userDataPath) {
+    constructor(userDataPath, proxyString, manager) {
         super();
         this.api = null;
+        this.manager = manager;
+        this.accountName = "Unknown";
 
         // Sử dụng đường dẫn từ AppData để có quyền ghi khi build .exe
         this.basePath = userDataPath;
         this.credentialsPath = path.join(this.basePath, 'credentials.json');
-        this.configPath = path.join(this.basePath, 'config.json');
         this.cookiePath = path.join(this.basePath, 'cookies.json');
         this.qrPath = path.join(this.basePath, 'qr.png');
         this.groupsPath = path.join(this.basePath, 'groups.json');
 
-        this.zalo = new Zalo({
-            cookiePath: this.cookiePath,
-            selfListen: true
-        });
+        this.setProxy(proxyString);
+
+        this.initZaloCore();
 
         this.masterQueue = {};
         this.groupNames = {};
-
-        // Khởi tạo trạng thái Hệ thống Bắt đầu/Tương tác
-        this.isRunning = false;
+        this.isRunning = false; // Đánh dấu tài khoản có quyền gửi/nhận hay không
+        this.isStopping = false; // Graceful Shutdown Wait Flow
         this.globalQueue = [];
         this.isProcessingGlobalQueue = false;
 
-        // Tải cấu hình từ AppData
-        this.config = { SOURCE_GROUP_IDS: [], DESTINATION_GROUP_IDS: [] };
-        if (fs.existsSync(this.configPath)) {
+        // Tải cấu hình (Được truyền từ AccountManager)
+        this.config = { SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [] };
+    }
+
+    setProxy(proxyString) {
+        this.proxyString = proxyString;
+        this.proxyAgent = undefined;
+        if (this.proxyString) {
             try {
-                this.config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-            } catch (e) {
-                console.error("Lỗi đọc config:", e);
+                let formattedProxy = this.proxyString.trim();
+                // Tự động format nếu người dùng chỉ nhập kiểu ip:port:user:pass
+                if (!/^https?:\/\//i.test(formattedProxy) && !/^socks\d?:\/\//i.test(formattedProxy)) {
+                    const parts = formattedProxy.split(':');
+                    if (parts.length === 4) {
+                        // Chuẩn: ip:port:user:pass
+                        formattedProxy = `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
+                    } else if (parts.length === 2) {
+                        // Chuẩn: ip:port
+                        formattedProxy = `http://${parts[0]}:${parts[1]}`;
+                    } else {
+                        formattedProxy = `http://${formattedProxy}`;
+                    }
+                }
+                this.proxyAgent = new HttpsProxyAgent(formattedProxy);
+            } catch (error) {
+                this.log(`=> ⚠️ Lỗi khởi tạo Proxy: Dữ liệu không hợp lệ. Vui lòng nhập đúng định dạng (VD: http://user:pass@ip:port)!`);
             }
+        }
+        if (this.zalo) {
+            this.initZaloCore(); // Re-init on proxy change
+        }
+    }
+
+    initZaloCore() {
+        const options = {
+            cookiePath: this.cookiePath,
+            selfListen: true
+        };
+        // Hỗ trợ truyền agent cho phiên bản zca-js (nếu thư viện bên trong dùng fetch/got hỗ trợ options.agent)
+        if (this.proxyAgent) {
+            options.agent = this.proxyAgent; 
+        }
+        this.zalo = new Zalo(options);
+    }
+
+
+    updateConfig(newConfig) {
+        this.clearAllQueues(); // Đổ sạch bộ đệm trước khi áp dụng Cấu hình mới
+        this.config = Object.assign({ SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [] }, newConfig);
+    }
+
+    markAsStopping() {
+        this.isStopping = true;
+        this.isRunning = false; // Ngừng tiếp nhận tin mới
+        // Vẫn cho phép processGlobalQueue xử lý nốt
+        if (!this.isProcessingGlobalQueue && this.globalQueue.length === 0) {
+            this.clearAllQueues(); // Đã sạch sẽ
         }
     }
 
@@ -47,17 +97,7 @@ class ZaloManager extends EventEmitter {
         this.emit('log', message);
     }
 
-    saveConfig(sourceIds, destIds) {
-        this.clearAllQueues(); // Đổ sạch bộ đệm trước khi áp dụng Cấu hình mới
-        this.config.SOURCE_GROUP_IDS = sourceIds || [];
-        this.config.DESTINATION_GROUP_IDS = destIds || [];
-        fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
-        this.log(`=> Đã cập nhật cấu hình Nhóm Nguồn và Đích.`);
-    }
-
     async getGroups(forceRefresh = false) {
-        if (!this.api) return [];
-
         if (forceRefresh) {
             // Nuke on Sync: Xoá trệt Hộ khẩu Nhóm cũ
             if (fs.existsSync(this.groupsPath)) fs.unlinkSync(this.groupsPath);
@@ -76,58 +116,82 @@ class ZaloManager extends EventEmitter {
             }
         }
 
-        try {
-            const groupsResp = await this.api.getAllGroups();
-            const result = [];
-            if (groupsResp && groupsResp.gridVerMap) {
-                const groupIds = Object.keys(groupsResp.gridVerMap);
-                this.log(`=> Đang đồng bộ thông tin chi tiết ${groupIds.length} nhóm. Vui lòng đợi...`);
-                for (let i = 0; i < groupIds.length; i += 50) {
-                    const chunk = groupIds.slice(i, i + 50);
-                    const infoResp = await this.api.getGroupInfo(chunk);
-                    if (infoResp && infoResp.gridInfoMap) {
-                        for (const [id, info] of Object.entries(infoResp.gridInfoMap)) {
-                            const name = info.name || 'Không rõ';
-                            this.groupNames[id] = name;
-                            result.push({ id, name });
+        if (!this.api) return [];
+
+        if (forceRefresh) {
+            try {
+                const groupsResp = await this.api.getAllGroups();
+                const result = [];
+                if (groupsResp && groupsResp.gridVerMap) {
+                    const groupIds = Object.keys(groupsResp.gridVerMap);
+                    this.log(`=> Đang đồng bộ thông tin chi tiết ${groupIds.length} nhóm. Vui lòng đợi...`);
+                    for (let i = 0; i < groupIds.length; i += 20) {
+                        const chunk = groupIds.slice(i, i + 20);
+                        const infoResp = await this.api.getGroupInfo(chunk);
+                        if (infoResp && infoResp.gridInfoMap) {
+                            for (const [id, info] of Object.entries(infoResp.gridInfoMap)) {
+                                const name = info.name || 'Không rõ';
+                                this.groupNames[id] = name;
+                                result.push({ id, name });
+                            }
+                        }
+                        
+                        // Chống spam API (Retry limit)
+                        if (i + 20 < groupIds.length) {
+                            await new Promise(r => setTimeout(r, 1500));
                         }
                     }
                 }
+                fs.writeFileSync(this.groupsPath, JSON.stringify(result, null, 2));
+                this.log("=> Đồng bộ Nhóm thành công!");
+                return result;
+            } catch (err) {
+                this.log(`=> Lỗi lấy danh sách nhóm: ${err.message}`);
+                return [];
             }
-            fs.writeFileSync(this.groupsPath, JSON.stringify(result, null, 2));
-            this.log("=> Đồng bộ Nhóm thành công!");
-            return result;
-        } catch (err) {
-            this.log(`=> Lỗi lấy danh sách nhóm: ${err.message}`);
-            return [];
         }
+        
+        return [];
     }
 
     async logout() {
         this.clearAllQueues();
         if (fs.existsSync(this.credentialsPath)) fs.unlinkSync(this.credentialsPath);
         if (fs.existsSync(this.cookiePath)) fs.unlinkSync(this.cookiePath);
-        
-        // Nuke on Logout: Xoá trắng Lịch sử Cấu hình & Danh bạ
-        if (fs.existsSync(this.configPath)) fs.unlinkSync(this.configPath);
+
+        // Nuke on Logout: Mọi config local của acc đã bị nuke bởi folder ngoài
         if (fs.existsSync(this.groupsPath)) fs.unlinkSync(this.groupsPath);
-        this.config = { SOURCE_GROUP_IDS: [], DESTINATION_GROUP_IDS: [] };
+        this.config = { SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [] };
         this.groupNames = {};
 
+        if (this.api && this.api.listener) {
+            try { this.api.listener.stop(); } catch(e) {}
+        }
+        this.isListening = false;
+        
         this.api = null;
         this.log("=> Đã đăng xuất và xóa phiên làm việc.");
         this.emit('logged_out');
     }
 
-    async login() {
+    async login(silent = false) {
         // 1. Thử đăng nhập bằng phiên cũ
         if (fs.existsSync(this.credentialsPath)) {
             try {
-                this.log("Đang kiểm tra phiên đăng nhập cũ...");
+                if (!silent) this.log("Đang kiểm tra phiên đăng nhập cũ...");
                 const creds = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
+                if (this.proxyAgent) creds.agent = this.proxyAgent; // Inject proxy vào luồng kết nối Zalo
                 this.api = await this.zalo.login(creds);
-                this.log("=> Đăng nhập thành công!");
-                this.emit('login_success');
+                
+                try {
+                    const info = await this.api.fetchAccountInfo();
+                    if (info && info.profile) {
+                        this.accountName = info.profile.displayName || info.profile.zaloName;
+                    }
+                } catch(e) {}
+
+                if (!silent) this.log(`=> Đăng nhập thành công! [${this.accountName}]`);
+                this.emit('login_success', this.accountName);
                 this.startListener();
                 return true;
             } catch (error) {
@@ -136,6 +200,7 @@ class ZaloManager extends EventEmitter {
         }
 
         // 2. Nếu không có phiên hoặc hết hạn -> Thông báo cho App.js hiện nút Tạo QR
+        if (!silent) this.emit('qr_expired');
         return false;
     }
 
@@ -177,7 +242,9 @@ class ZaloManager extends EventEmitter {
             }, 120000);
 
             this.log("=> Đang yêu cầu mã QR từ Zalo...");
-            this.api = await this.zalo.loginQR();
+            const loginOptions = {};
+            if (this.proxyAgent) loginOptions.agent = this.proxyAgent;
+            this.api = await this.zalo.loginQR(loginOptions);
 
             clearInterval(qrCheckInterval);
 
@@ -190,7 +257,14 @@ class ZaloManager extends EventEmitter {
             };
             fs.writeFileSync(this.credentialsPath, JSON.stringify(credentialsToSave, null, 2));
 
-            this.emit('login_success');
+            try {
+                const info = await this.api.fetchAccountInfo();
+                if (info && info.profile) {
+                    this.accountName = info.profile.displayName || info.profile.zaloName;
+                }
+            } catch(e) {}
+
+            this.emit('login_success', this.accountName);
             this.startListener();
             return true;
 
@@ -201,16 +275,21 @@ class ZaloManager extends EventEmitter {
     }
 
     startListener() {
-        if (!this.api) return;
+        if (!this.api || !this.api.listener) return;
+        
+        // KHÓA VAN: Tránh Zalo Server kích "Another connection" khi bấm Start nhiều lần
+        if (this.isListening) return;
+        this.isListening = true;
 
         this.api.listener.on("message", (message) => {
             if (!this.isRunning) return; // Máy dừng thì tai điếc
 
-            const threadId = String(message.threadId);
+            const threadId = message.threadId;
 
-            if (this.config.SOURCE_GROUP_IDS.includes(threadId)) {
-                const groupName = this.groupNames[threadId] || threadId;
-                this.log(`\n>>> [Nhận tin] Nhóm nguồn: ${groupName} (Từ: ${message?.data?.dName || 'Ẩn danh'})`);
+            const groupName = this.groupNames[threadId] || threadId;
+            // DỰA VÀO NAME ĐỂ NHẬN DIỆN SOURCE, không dùng threadId ảo hoá
+            if (this.config.SOURCE_GROUP_NAMES && this.config.SOURCE_GROUP_NAMES.includes(groupName)) {
+                this.log(`\n>>> [Nhận tin] Nhóm nguồn: ${groupName} (Gửi bởi: ${message?.data?.dName || 'Ẩn danh'}) - Nhận tại tài khoản: [${this.accountName}]`);
 
                 const content = message.data && message.data.content;
                 const msgType = message.data && message.data.msgType;
@@ -239,7 +318,10 @@ class ZaloManager extends EventEmitter {
                         } catch (e) { }
                     }
                     if (imgUrl && imgUrl.startsWith("http")) {
-                        const promise = fetch(imgUrl)
+                        const fetchOptions = {};
+                        if (this.proxyAgent) fetchOptions.agent = this.proxyAgent; // Kéo ảnh ẩn danh qua proxy
+
+                        const promise = fetch(imgUrl, fetchOptions)
                             .then(async res => {
                                 if (!res.ok) throw new Error(res.status);
                                 const arrayBuffer = await res.arrayBuffer();
@@ -265,7 +347,7 @@ class ZaloManager extends EventEmitter {
                 }
 
                 if (inserted) {
-                    this.log(`=> Đã tiếp nhận tin nhắn. Chờ 60 giây tĩnh lặng...`);
+                    this.log(`=> Đã tiếp nhận tin nhắn. Chờ 240 giây tĩnh lặng...`);
 
                     // Nếu đây là tin nhắn bắt đầu một chuỗi mới
                     if (this.masterQueue[threadId].items.length === 1) {
@@ -292,15 +374,15 @@ class ZaloManager extends EventEmitter {
                     const sessionStart = this.masterQueue[threadId].sessionStartTime || Date.now();
                     const elapsed = Date.now() - sessionStart;
 
-                    // Nếu chuỗi gửi rải rác đã kéo dài trên 3 phút (180_000ms), TÌM ĐIỂM CẮT LÀ TIN VĂN BẢN ĐỂ ÉP XẢ HÀNG
-                    if (elapsed >= 180000 && isTextMsg) {
-                        this.log(`=> [Bảo vệ] Nhóm nguồn đã gửi rải rác quá 3 phút. Bắt buộc cắt đứt chốt Cụm tại tin nhắn Văn Bản này!`);
+                    // Nếu chuỗi gửi rải rác đã kéo dài trên 10 phút (600_000ms), TÌM ĐIỂM CẮT LÀ TIN VĂN BẢN ĐỂ ÉP XẢ HÀNG
+                    if (elapsed >= 600000 && isTextMsg) {
+                        this.log(`=> [Bảo vệ] Nhóm nguồn đã gửi rải rác quá 10 phút. Bắt buộc cắt đứt chốt Cụm tại tin nhắn Văn Bản này!`);
                         triggerFlush();
                     } else {
-                        // Trạng thái bình thường: Chờ 60 giây yên tĩnh mới chốt
+                        // Trạng thái bình thường: Chờ 4 phút yên tĩnh mới chốt
                         this.masterQueue[threadId].timer = setTimeout(() => {
                             triggerFlush();
-                        }, 60000);
+                        }, 240000);
                     }
                 }
             }
@@ -353,7 +435,7 @@ class ZaloManager extends EventEmitter {
 
                 let reusedIds = [];
                 try {
-                    const firstDestId = this.config.DESTINATION_GROUP_IDS[0] || this.config.SOURCE_GROUP_IDS[0];
+                    const firstDestId = Object.keys(this.groupNames).find(id => this.groupNames[id] === this.config.DESTINATION_GROUP_NAMES[0]) || Object.keys(this.groupNames).find(id => this.groupNames[id] === this.config.SOURCE_GROUP_NAMES[0]);
                     const CHUNK_SIZE = 4;
                     for (let c = 0; c < attachmentsArray.length; c += CHUNK_SIZE) {
                         const chunkArr = attachmentsArray.slice(c, c + CHUNK_SIZE);
@@ -384,20 +466,21 @@ class ZaloManager extends EventEmitter {
                 }
 
                 this.log(`=> Đang gửi ảnh tới các nhóm...`);
-                for (let i = 0; i < this.config.DESTINATION_GROUP_IDS.length; i++) {
-                    const destId = this.config.DESTINATION_GROUP_IDS[i];
+                for (const targetName of this.config.DESTINATION_GROUP_NAMES) {
+                    const destId = Object.keys(this.groupNames).find(id => this.groupNames[id] === targetName);
+                    if (!destId) continue;
                     try {
                         if (reusedIds.length > 0) {
                             await sendPhotoWithExistingIds(this.api, reusedIds, destId, "");
-                            this.log(`=> Đã gửi ảnh tới nhóm [${destId}]`);
+                            this.log(`=> Đã gửi ảnh tới nhóm [${targetName}]`);
                         } else {
                             await this.api.sendMessage({ msg: "", attachments: attachmentsArray }, destId, ThreadType.Group);
-                            this.log(`=> Đã gửi ảnh tới nhóm [${destId}]`);
+                            this.log(`=> Đã gửi ảnh tới nhóm [${targetName}]`);
                         }
 
                         await new Promise(r => setTimeout(r, 1500));
                     } catch (e) {
-                        this.log(`=> Lỗi gửi ảnh tới nhóm [${destId}]: ${e.message}`);
+                        this.log(`=> Lỗi gửi ảnh tới nhóm [${targetName}]: ${e.message}`);
                     }
                 }
 
@@ -413,11 +496,20 @@ class ZaloManager extends EventEmitter {
                     lastPhotoTimestamp = item.timestamp;
                 } else if (item.type === 'text') {
                     await flushPhotos();
-                    for (const destId of this.config.DESTINATION_GROUP_IDS) {
+                    // Tùy chọn 2: Gửi lần lượt để an toàn
+                    for (const targetName of this.config.DESTINATION_GROUP_NAMES) {
+                        // Dò tìm Target ID thật sự dành riêng cho account này thông qua Name
+                        const targetId = Object.keys(this.groupNames).find(id => this.groupNames[id] === targetName);
+                        
+                        if (!targetId) {
+                            this.log(`=> ⚠️ Bỏ qua nhóm đích "${targetName}": Tài khoản [${this.accountName}] chưa tham gia nhóm này.`);
+                            continue;
+                        }
+
                         try {
-                            await this.api.sendMessage(item.data, destId, ThreadType.Group);
+                            await this.api.sendMessage(item.data, targetId, ThreadType.Group);
                             await new Promise(r => setTimeout(r, 1000));
-                        } catch (ex) { this.log(`=> Lỗi gửi chữ nhóm [${destId}]: ${ex.message}`) }
+                        } catch (ex) { this.log(`=> Lỗi gửi chữ nhóm [${targetName}]: ${ex.message}`) }
                     }
                     this.log(`=> Đã gửi văn bản thành công.`);
                 }
@@ -425,15 +517,25 @@ class ZaloManager extends EventEmitter {
             await flushPhotos();
         }
         this.isProcessingGlobalQueue = false;
+        
+        // Nếu đang ở trạng thái Rút khỏi ca và đã xử lý xong hết hàng đợi -> Đóng hẳn
+        if (this.isStopping && this.globalQueue.length === 0) {
+            const hasPendingMaster = Object.values(this.masterQueue).some(mq => mq.items.length > 0);
+            if (!hasPendingMaster) {
+                this.log(`=> ✅ Luồng chờ đã xử lý dứt điểm. Dọn dẹp thành công để nhường lại ca.`);
+                this.clearAllQueues();
+            }
+        }
     }
 
     toggleStatus(isEnabled) {
         this.isRunning = isEnabled;
+        this.isStopping = false;
         if (!isEnabled) {
             this.clearAllQueues();
-            this.log("=> 🛑 ĐÃ TẠM DỪNG");
+            this.log(`=> 🛑 [${this.accountName}] ĐÃ TẠM DỪNG GỬI TIN`);
         } else {
-            this.log("=> ▶️ ĐÃ BẮT ĐẦU");
+            this.log(`=> ▶️ [${this.accountName}] ĐÃ SẴN SÀNG LẮNG NGHE & GỬI`);
         }
         return this.isRunning;
     }

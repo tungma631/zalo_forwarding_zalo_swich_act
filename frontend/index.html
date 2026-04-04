@@ -1,104 +1,151 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zalo Forwarding Pro</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Zalo Multi-Forwarder</title>
+    <!-- Modern Google Font: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-    <!-- Màn hình Đăng nhập -->
-    <div id="login-view" class="view">
-        <div class="glass-card login-card">
-            <div class="logo">Zalo Forwarding</div>
-            <p id="login-status">Đang kiểm tra kết nối...</p>
-            <div id="qr-container">
-                <img id="qr-img" src="" alt="QR Code" style="display: none;">
+    <!-- HEADER & TAB NAVIGATION -->
+    <header class="app-header">
+        <div class="header-brand">
+            <svg class="brand-icon" viewBox="0 0 24 24" width="24" height="24">
+                <path fill="#2563eb"
+                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+            </svg>
+            <h2>Zalo Automation</h2>
+        </div>
+
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="tab-accounts">
+                <span class="tab-icon">👥</span> Quản Lý Tài Khoản
+            </button>
+            <button class="tab-btn" data-tab="tab-forwarding">
+                <span class="tab-icon">🔄</span> Chuyển Tiếp Tin
+            </button>
+        </div>
+
+        <div class="header-status">
+            <div id="top-status-indicator" class="status-indicator offline"></div>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="app-main">
+
+        <!-- TAB 1: QUẢN LÝ TÀI KHOẢN -->
+        <section id="tab-accounts" class="tab-content active">
+            <div class="panel-header">
+                <h3>Danh sách Tài khoản làm việc</h3>
+                <button id="btn-add-account" class="btn primary">
+                    <span class="btn-icon">＋</span> Thêm Tài Khoản
+                </button>
             </div>
-            <div class="loader" id="login-loader"></div>
-            <button id="btn-generate-qr" class="btn primary" style="margin-top: 15px; display: none;">Lấy lại mã QR</button>
+
+            <div id="account-grid" class="account-grid">
+                <!-- Nội dung list account render từ JS -->
+            </div>
+
+        </section>
+
+        <!-- TAB 2: CHUYỂN TIẾP (FORWARDING) -->
+        <section id="tab-forwarding" class="tab-content">
+            <div class="forwarding-layout">
+
+                <!-- KHU VỰC CÀI ĐẶT NHÓM -->
+                <div class="groups-section">
+                    <div class="action-bar header-panel">
+                        <button id="btn-sync-groups" class="btn outline">
+                            <span class="btn-icon">⬇️</span> Lọc Giao Thoa Nhóm
+                        </button>
+                        <div style="flex: 1;"></div>
+                        <span id="unsaved-warning" class="warning-text" style="display: none;">⚠️ Thay đổi chưa
+                            lưu!</span>
+                        <span id="save-status" class="success-text" style="opacity: 0;">✔ Đã lưu cấu hình</span>
+                        <button id="btn-save" class="btn primary">Lưu Cấu Hình</button>
+                    </div>
+
+                    <div class="groups-grid">
+                        <div class="group-column">
+                            <div class="column-header dest-header">
+                                <h3>📂 Các Nhóm Lắng Nghe (Nguồn) <span class="badge" id="source-count">0</span></h3>
+                                <p class="desc">Tin nhắn mới từ các nhóm này sẽ được thu thập.</p>
+                                <input type="text" id="search-source" class="search-input"
+                                    placeholder="🔍 Tìm kiếm nhóm nguồn...">
+                                <div class="bulk-actions">
+                                    <button class="btn text-btn" id="btn-select-all-source">Chọn tất cả</button>
+                                    <button class="btn text-btn danger" id="btn-unselect-all-source">Bỏ chọn tất
+                                        cả</button>
+                                </div>
+                            </div>
+                            <div class="list-container dest-list" id="source-list"></div>
+                        </div>
+
+                        <div class="group-column">
+                            <div class="column-header src-header">
+                                <h3>🚀 Các Nhóm Nhận Tin (Đích) <span class="badge" id="dest-count">0</span></h3>
+                                <p class="desc">Ảnh và văn bản thu thập được sẽ phát tới đây.</p>
+                                <input type="text" id="search-dest" class="search-input"
+                                    placeholder="🔍 Tìm kiếm nhóm đích...">
+                                <div class="bulk-actions">
+                                    <button class="btn text-btn" id="btn-select-all-dest">Chọn tất cả</button>
+                                    <button class="btn text-btn danger" id="btn-unselect-all-dest">Bỏ chọn tất
+                                        cả</button>
+                                </div>
+                            </div>
+                            <div class="list-container src-list" id="dest-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- KHU VỰC ĐIỀU KHIỂN & LOGS -->
+                <div class="controls-section">
+                    <div class="system-control">
+                        <button id="btn-toggle-status" class="btn success giant-btn">
+                            ▶ KHỞI ĐỘNG HỆ THỐNG GỬI TIN
+                        </button>
+                    </div>
+
+                    <div class="log-panel">
+                        <div class="log-header">
+                            <h3>📜 Terminal Logs</h3>
+                            <button id="btn-clear-log" class="btn text-btn">Xóa Log</button>
+                        </div>
+                        <div id="log-window" class="log-window"></div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- MODAL QUÉT QR ĐĂNG NHẬP -->
+    <div id="qr-modal" class="modal-overlay">
+        <div class="modal-box">
+            <button id="btn-close-modal" class="btn-close">×</button>
+            <h3 style="margin-top:0; color:var(--text-primary); font-size:18px;">🔑 Xác Thực Zalo</h3>
+
+            <div id="qr-placeholder" class="qr-placeholder">
+                <img id="qr-img" style="display: none;" alt="Zalo QR Code">
+                <div id="login-loader" class="loader" style="display: none;"></div>
+                <button id="btn-generate-qr" class="btn primary" style="margin: 20px auto;">🎯 Lấy Mã QR Đăng
+                    Nhập</button>
+            </div>
+
+            <p id="login-status" style="margin-top:20px; font-size:13px; color:var(--text-secondary);">Nhấn nút trên để
+                lấy mã từ Server Zalo.</p>
         </div>
     </div>
 
-    <!-- Màn hình Chính -->
-    <div id="main-view" class="view" style="display: none;">
-        <header class="glass-header">
-            <div class="brand">
-                <h1>Zalo Forwarding Pro</h1>
-                <span class="status-indicator" id="top-status-indicator"></span>
-            </div>
-            <div style="display: flex; gap: 10px;">
-                <button id="btn-toggle-status" class="btn success">▶ Bắt Đầu</button>
-                <button id="btn-logout" class="btn danger">Đăng xuất</button>
-            </div>
-        </header>
-
-        <div class="content">
-            <div class="config-panel">
-                <!-- Cột Nhóm Nguồn -->
-                <div class="glass-module">
-                    <div class="module-header">
-                        <h2>Nhóm Nguồn (Lắng nghe)</h2>
-                        <div class="header-actions" style="display: flex; gap: 8px; align-items: center;">
-                            <button id="btn-select-all-source" class="btn text-btn" style="font-size: 11px; padding: 4px 8px; background: rgba(59, 130, 246, 0.15); color: white;">Chọn tất cả</button>
-                            <button id="btn-unselect-all-source" class="btn text-btn" style="font-size: 11px; padding: 4px 8px; background: rgba(239, 68, 68, 0.15); color: white;">Bỏ chọn</button>
-                            <span class="badge" id="source-count">0</span>
-                        </div>
-                    </div>
-                    <div class="search-box">
-                        <input type="text" id="search-source" placeholder="Tìm kiếm nhóm nguồn...">
-                    </div>
-                    <div class="list-container" id="source-list">
-                        <!-- Rendered by JS -->
-                    </div>
-                </div>
-
-                <!-- Phím chuyển -->
-                <div class="transfer-icon">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                </div>
-
-                <!-- Cột Nhóm Đích -->
-                <div class="glass-module">
-                    <div class="module-header">
-                        <h2>Nhóm Đích (Chuyển tiếp)</h2>
-                        <div class="header-actions" style="display: flex; gap: 8px; align-items: center;">
-                            <button id="btn-select-all-dest" class="btn text-btn" style="font-size: 11px; padding: 4px 8px; background: rgba(59, 130, 246, 0.15); color: white;">Chọn tất cả</button>
-                            <button id="btn-unselect-all-dest" class="btn text-btn" style="font-size: 11px; padding: 4px 8px; background: rgba(239, 68, 68, 0.15); color: white;">Bỏ chọn</button>
-                            <span class="badge" id="dest-count">0</span>
-                        </div>
-                    </div>
-                    <div class="search-box">
-                        <input type="text" id="search-dest" placeholder="Tìm kiếm nhóm đích...">
-                    </div>
-                    <div class="list-container" id="dest-list">
-                        <!-- Rendered by JS -->
-                    </div>
-                </div>
-            </div>
-
-            <!-- Hành động -->
-            <div class="action-bar" style="justify-content: flex-start; gap: 10px;">
-                <button id="btn-sync-groups" class="btn secondary" style="background: var(--surface); color: white; border: 1px solid rgba(255,255,255,0.1);">⬇️ Đồng bộ Nhóm từ Zalo</button>
-                <div style="flex: 1;"></div>
-                <button id="btn-save" class="btn primary">Lưu Cấu Hình</button>
-                <span id="unsaved-warning" style="display: none; color: var(--danger); font-size: 13px; font-weight: bold; margin-left: 10px;">⚠️ LƯU Ý: Bạn có thay đổi chưa được lưu! Hãy xác nhận "Lưu Cấu Hình"</span>
-                <span id="save-status"></span>
-            </div>
-
-            <!-- Khung theo dõi Log -->
-            <div class="log-panel glass-module">
-                <div class="log-header">
-                    <h3>Terminal Console</h3>
-                    <button id="btn-clear-log" class="btn text-btn">Xoá Log</button>
-                </div>
-                <div class="log-content" id="log-window"></div>
-            </div>
-        </div>
-    </div>
-
+    <!-- SCRIPT -->
     <script src="app.js"></script>
 </body>
+
 </html>

@@ -1,9 +1,9 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
-const ZaloManager = require('./zaloService');
+const AccountManager = require('./accountManager');
 
 let mainWindow;
-let zaloManager;
+let accountManager;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -26,11 +26,10 @@ function createWindow() {
 
 app.whenReady().then(() => {
     // 1. Lấy đường dẫn thư mục lưu trữ dữ liệu người dùng (Sửa lỗi treo khi build .exe)
-    // Đường dẫn này thường là: C:\Users\<Name>\AppData\Roaming\antigravity_zalo
     const userDataPath = app.getPath('userData'); 
     
-    // 2. Khởi tạo ZaloManager với đường dẫn mới
-    zaloManager = new ZaloManager(userDataPath);
+    // 2. Khởi tạo AccountManager với đường dẫn mới
+    accountManager = new AccountManager(userDataPath);
 
     // Custom Menu
     const template = [
@@ -57,71 +56,96 @@ app.whenReady().then(() => {
 
     createWindow();
 
-    // --- Lắng nghe các sự kiện từ ZaloService ---
+    // --- Lắng nghe các sự kiện từ System ---
 
-    zaloManager.on('log', (message) => {
+    accountManager.on('log', (message) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-log', message);
     });
 
-    zaloManager.on('qr_ready', (qrPath) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-qr', qrPath);
+    accountManager.on('qr_ready', (data) => {
+        // data: { accountId, qr }
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-qr', data);
     });
 
-    zaloManager.on('login_success', () => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-login-success');
+    accountManager.on('login_success', (accountId) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-login-success', accountId);
     });
 
-    zaloManager.on('logged_out', () => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-logged-out');
+    accountManager.on('logged_out', (accountId) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-logged-out', accountId);
     });
 
-    // Xử lý khi QR hết hạn (ZCA-JS ném lỗi hoặc timeout)
-    zaloManager.on('qr_expired', async () => {
+    accountManager.on('qr_expired', (accountId) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('zalo-log', "⚠️ Mã QR đã hết hạn. Vui lòng bấm tạo mã mới.");
-            // UI sẽ gọi zalo-generate-qr khi user bấm vào nút TẠO LẠI QR
-            mainWindow.webContents.send('zalo-qr-failed');
+            mainWindow.webContents.send('zalo-log', `⚠️ [${accountId}] Mã QR đã hết hạn. Vui lòng bấm Lấy mã mới.`);
+            mainWindow.webContents.send('zalo-qr-failed', accountId);
         }
+    });
+
+    accountManager.on('update_accounts', (accountList) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zalo-update-accounts', accountList);
     });
 
     // --- Handle IPC calls từ Frontend ---
 
-    ipcMain.handle('zalo-login', async () => {
+    ipcMain.handle('zalo-get-accounts', () => {
+        return accountManager.getAccountList();
+    });
+
+    ipcMain.handle('zalo-create-account', async () => {
+        return await accountManager.createAccount();
+    });
+
+    ipcMain.handle('zalo-delete-account', async (event, accountId) => {
+        await accountManager.deleteAccount(accountId);
+        return true;
+    });
+
+    ipcMain.handle('zalo-save-proxy', (event, accountId, proxyString) => {
+        accountManager.saveProxy(accountId, proxyString);
+        return true;
+    });
+
+    ipcMain.handle('zalo-login', async (event, accountId) => {
         try {
-            return await zaloManager.login();
+            return await accountManager.loginAccount(accountId);
         } catch (error) {
             console.error("Lỗi Login IPC:", error);
             return false;
         }
     });
 
-    ipcMain.handle('zalo-logout', async () => {
-        await zaloManager.logout();
+    ipcMain.handle('zalo-logout', async (event, accountId) => {
+        await accountManager.logoutAccount(accountId);
+        return true;
     });
 
-    ipcMain.handle('zalo-get-groups', async (event, force) => {
-        return await zaloManager.getGroups(force);
+    ipcMain.handle('zalo-generate-qr', async (event, accountId) => {
+        return await accountManager.generateQR(accountId);
     });
 
-    ipcMain.handle('zalo-generate-qr', async () => {
-        return await zaloManager.generateNewQR();
-    });
-
+    // Các hàm Global
     ipcMain.handle('zalo-get-config', () => {
-        return zaloManager.config;
+        return accountManager.globalConfig;
     });
 
-    ipcMain.handle('zalo-save-config', (event, sourceIds, destIds) => {
-        zaloManager.saveConfig(sourceIds, destIds);
+    ipcMain.handle('zalo-save-config', async (event, sourceIds, destIds) => {
+        await accountManager.saveGlobalConfig(sourceIds, destIds);
     });
 
     ipcMain.handle('zalo-toggle-status', (event, isEnabled) => {
-        return zaloManager.toggleStatus(isEnabled);
+        return accountManager.toggleSystemStatus(isEnabled);
+    });
+
+    ipcMain.handle('zalo-get-groups', async (event, force) => {
+        return await accountManager.getIntersectedGroups(force);
     });
 
     app.on('before-quit', () => {
-        if (zaloManager) {
-            zaloManager.clearAllQueues();
+        if (accountManager) {
+            for (const key in accountManager.accounts) {
+                accountManager.accounts[key].zaloManager.clearAllQueues();
+            }
             console.log("Đã dọn dẹp RAM trước khi thoát ứng dụng.");
         }
     });
