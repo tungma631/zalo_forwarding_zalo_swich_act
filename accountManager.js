@@ -16,10 +16,13 @@ class AccountManager extends EventEmitter {
         }
 
         // Tải Global Config
-        this.globalConfig = { SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [] };
+        this.globalConfig = { SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [], PRICE_ADJUSTMENTS: {} };
         if (fs.existsSync(this.globalConfigPath)) {
             try {
                 this.globalConfig = JSON.parse(fs.readFileSync(this.globalConfigPath, 'utf8'));
+                if (!this.globalConfig.PRICE_ADJUSTMENTS) {
+                    this.globalConfig.PRICE_ADJUSTMENTS = {};
+                }
                 // Migrate config nếu đang dùng chuẩn cũ
                 if (this.globalConfig.SOURCE_GROUP_IDS) {
                     this.globalConfig.SOURCE_GROUP_NAMES = this.globalConfig.SOURCE_GROUP_IDS;
@@ -116,9 +119,10 @@ class AccountManager extends EventEmitter {
         }));
     }
 
-    async saveGlobalConfig(sourceNames, destNames) {
+    async saveGlobalConfig(sourceNames, destNames, priceAdjustments) {
         this.globalConfig.SOURCE_GROUP_NAMES = sourceNames || [];
         this.globalConfig.DESTINATION_GROUP_NAMES = destNames || [];
+        this.globalConfig.PRICE_ADJUSTMENTS = priceAdjustments || {};
         fs.writeFileSync(this.globalConfigPath, JSON.stringify(this.globalConfig, null, 2));
         
         // Cập nhật config cho tất cả các instance đang chạy

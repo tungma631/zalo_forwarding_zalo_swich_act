@@ -83,6 +83,10 @@ async function main() {
                         console.log(`[Nhóm] Tên: ${info.name || 'Không rõ'} | ID: ${id}`);
                     }
                 }
+                
+                if (i + 50 < groupIds.length) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
             }
         }
     } catch (err) {

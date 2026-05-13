@@ -129,8 +129,8 @@ app.whenReady().then(() => {
         return accountManager.globalConfig;
     });
 
-    ipcMain.handle('zalo-save-config', async (event, sourceIds, destIds) => {
-        await accountManager.saveGlobalConfig(sourceIds, destIds);
+    ipcMain.handle('zalo-save-config', async (event, sourceIds, destIds, priceAdjustments) => {
+        await accountManager.saveGlobalConfig(sourceIds, destIds, priceAdjustments);
     });
 
     ipcMain.handle('zalo-toggle-status', (event, isEnabled) => {

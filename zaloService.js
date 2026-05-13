@@ -80,7 +80,7 @@ class ZaloManager extends EventEmitter {
 
     updateConfig(newConfig) {
         this.clearAllQueues(); // Đổ sạch bộ đệm trước khi áp dụng Cấu hình mới
-        this.config = Object.assign({ SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [] }, newConfig);
+        this.config = Object.assign({ SOURCE_GROUP_NAMES: [], DESTINATION_GROUP_NAMES: [], PRICE_ADJUSTMENTS: {} }, newConfig);
     }
 
     markAsStopping() {
@@ -99,7 +99,6 @@ class ZaloManager extends EventEmitter {
 
     async getGroups(forceRefresh = false) {
         if (forceRefresh) {
-            // Nuke on Sync: Xoá trệt Hộ khẩu Nhóm cũ
             if (fs.existsSync(this.groupsPath)) fs.unlinkSync(this.groupsPath);
             this.groupNames = {};
         }
@@ -118,40 +117,35 @@ class ZaloManager extends EventEmitter {
 
         if (!this.api) return [];
 
-        if (forceRefresh) {
-            try {
-                const groupsResp = await this.api.getAllGroups();
-                const result = [];
-                if (groupsResp && groupsResp.gridVerMap) {
-                    const groupIds = Object.keys(groupsResp.gridVerMap);
-                    this.log(`=> Đang đồng bộ thông tin chi tiết ${groupIds.length} nhóm. Vui lòng đợi...`);
-                    for (let i = 0; i < groupIds.length; i += 20) {
-                        const chunk = groupIds.slice(i, i + 20);
-                        const infoResp = await this.api.getGroupInfo(chunk);
-                        if (infoResp && infoResp.gridInfoMap) {
-                            for (const [id, info] of Object.entries(infoResp.gridInfoMap)) {
-                                const name = info.name || 'Không rõ';
-                                this.groupNames[id] = name;
-                                result.push({ id, name });
-                            }
-                        }
-                        
-                        // Chống spam API (Retry limit)
-                        if (i + 20 < groupIds.length) {
-                            await new Promise(r => setTimeout(r, 1500));
+        try {
+            const groupsResp = await this.api.getAllGroups();
+            const result = [];
+            if (groupsResp && groupsResp.gridVerMap) {
+                const groupIds = Object.keys(groupsResp.gridVerMap);
+                this.log(`=> Đang đồng bộ thông tin chi tiết ${groupIds.length} nhóm. Vui lòng đợi...`);
+                for (let i = 0; i < groupIds.length; i += 50) {
+                    const chunk = groupIds.slice(i, i + 50);
+                    const infoResp = await this.api.getGroupInfo(chunk);
+                    if (infoResp && infoResp.gridInfoMap) {
+                        for (const [id, info] of Object.entries(infoResp.gridInfoMap)) {
+                            const name = info.name || 'Không rõ';
+                            this.groupNames[id] = name;
+                            result.push({ id, name });
                         }
                     }
+                    
+                    if (i + 50 < groupIds.length) {
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
                 }
-                fs.writeFileSync(this.groupsPath, JSON.stringify(result, null, 2));
-                this.log("=> Đồng bộ Nhóm thành công!");
-                return result;
-            } catch (err) {
-                this.log(`=> Lỗi lấy danh sách nhóm: ${err.message}`);
-                return [];
             }
+            fs.writeFileSync(this.groupsPath, JSON.stringify(result, null, 2));
+            this.log("=> Đồng bộ Nhóm thành công!");
+            return result;
+        } catch (err) {
+            this.log(`=> Lỗi lấy danh sách nhóm: ${err.message}`);
+            return [];
         }
-        
-        return [];
     }
 
     async logout() {
@@ -302,7 +296,12 @@ class ZaloManager extends EventEmitter {
                 let inserted = false;
 
                 if (typeof content === "string") {
-                    this.masterQueue[threadId].items.push({ type: 'text', data: content, timestamp });
+                    let adjustedContent = content;
+                    const offset = this.config.PRICE_ADJUSTMENTS && this.config.PRICE_ADJUSTMENTS[groupName];
+                    if (offset) {
+                        adjustedContent = this.smartPriceAdjuster(content, offset);
+                    }
+                    this.masterQueue[threadId].items.push({ type: 'text', data: adjustedContent, timestamp });
                     inserted = true;
                 }
                 else if (msgType === "chat.photo") {
@@ -550,6 +549,67 @@ class ZaloManager extends EventEmitter {
         this.globalQueue = [];
         this.isProcessingGlobalQueue = false;
         this.log("=> [Hệ thống] Bộ nhớ Cache đã được giải phóng hoàn toàn.");
+    }
+
+    smartPriceAdjuster(text, offset) {
+        if (!offset || isNaN(parseInt(offset))) return text;
+        const adjustVal = parseInt(offset);
+
+        // Regex tìm vùng có khả năng là số (hỗ trợ phân cách ngàn bằng chấm hoặc phẩy)
+        // Hỗ trợ từ khóa cách số một khoảng (vd: Giá áo : 150k, Zá : 155k)
+        return text.replace(/((?:giá|gia|zá|buôn|buon|bán|ban|sỉ|si|lẻ|le|chỉ|chi|hàng|hang|ctv)[^\d\n]{0,12})?([0-9]+(?:\.[0-9]{3})*(?:,[0-9]{3})?)(\s*(?:k|đ|vnd|vnđ|\/|-))?/gi, (match, prefix, numStr, suffix, offsetIdx, fullText) => {
+            prefix = prefix || "";
+            suffix = suffix || "";
+            
+            let isThousandFormat = numStr.includes('.') || numStr.includes(',');
+            let rawNum = parseInt(numStr.replace(/[.,]/g, ''));
+            
+            // Bỏ qua nếu là mã số bắt đầu bằng số 0 (ví dụ: 00306, 098...)
+            if (numStr.startsWith('0') && numStr !== '0') return match;
+            
+            // Lấy ngữ cảnh trước và sau để tránh đổi Mã Hàng (ví dụ: Mã 275)
+            let preContext = fullText.substring(Math.max(0, offsetIdx - 15), offsetIdx).toLowerCase();
+            let postContext = fullText.substring(offsetIdx + match.length, Math.min(fullText.length, offsetIdx + match.length + 15)).toLowerCase();
+            
+            let isPrice = false;
+            
+            if (prefix.trim().length > 0 && /giá|gia|zá|buôn|buon|bán|ban|sỉ|si|lẻ|le|ctv/.test(prefix.toLowerCase())) isPrice = true;
+            if (suffix.toLowerCase().includes('k') || suffix.toLowerCase().includes('đ') || suffix.toLowerCase().includes('vnd') || suffix.toLowerCase().includes('/')) isPrice = true;
+            if (/giá|gia|zá|buôn|buon|bán|ban|sỉ|si|lẻ|le|ctv/.test(preContext)) isPrice = true;
+            
+            // Xử lý logic số trơ trọi (VD: "275" hoặc "100.000")
+            if (rawNum >= 50 && rawNum <= 9999) { 
+                if (!/mã|size|kg|m|cm|sz|sp|chiếc/.test(preContext) && !/mã|size|kg|m|cm|sz|sp|chiếc/.test(postContext)) {
+                    isPrice = true; 
+                }
+            }
+            if (rawNum >= 50000 && rawNum <= 99999999) {
+                if (!/mã|size|sz|sp|chiếc/.test(preContext)) {
+                    isPrice = true;
+                }
+            }
+
+            if (isPrice) {
+                let newVal = rawNum;
+                // Nếu số > 50000 (VND), offset là +10k thì phải cộng 10000
+                if (rawNum >= 50000) {
+                    newVal = rawNum + (adjustVal * 1000);
+                } else {
+                    newVal = rawNum + adjustVal;
+                }
+                
+                // Tránh giá bị âm (nếu trừ lố)
+                if (newVal < 0) newVal = 0;
+                
+                let newValStr = newVal.toString();
+                if (isThousandFormat && newVal >= 1000) {
+                    newValStr = newVal.toLocaleString('vi-VN');
+                }
+                return `${prefix}${newValStr}${suffix}`;
+            }
+            
+            return match;
+        });
     }
 }
 

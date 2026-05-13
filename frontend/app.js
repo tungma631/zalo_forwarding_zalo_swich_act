@@ -46,6 +46,7 @@ const ui = {
 let allGroups = [];
 let sourceSelection = new Set();
 let destSelection = new Set();
+let priceAdjustments = {};
 let currentQRAccountId = null; // Account ID đang chờ QR
 
 // --- TABS LOGIC ---
@@ -282,6 +283,7 @@ async function loadGroups(force = false) {
     const config = await window.zaloAPI.getConfig();
     if (config.SOURCE_GROUP_NAMES) config.SOURCE_GROUP_NAMES.forEach(name => sourceSelection.add(name));
     if (config.DESTINATION_GROUP_NAMES) config.DESTINATION_GROUP_NAMES.forEach(name => destSelection.add(name));
+    if (config.PRICE_ADJUSTMENTS) priceAdjustments = config.PRICE_ADJUSTMENTS;
     
     // Yêu cầu getGroups kèm cờ force (để trả về list name)
     allGroups = await window.zaloAPI.getGroups(force);
@@ -410,6 +412,34 @@ function renderList(groups, selectionSet, container, countDisplay, type) {
 
         div.appendChild(checkbox);
         div.appendChild(span);
+        
+        if (type === 'source') {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'price-offset-input';
+            input.placeholder = '+/- K';
+            input.title = 'Tăng/giảm giá (K) cho nhóm này';
+            input.value = priceAdjustments[group.name] || '';
+            input.style.display = checkbox.checked ? 'block' : 'none';
+            
+            checkbox.addEventListener('change', (e) => {
+                input.style.display = e.target.checked ? 'block' : 'none';
+                if (!e.target.checked) {
+                    delete priceAdjustments[group.name];
+                    input.value = '';
+                }
+            });
+            
+            input.addEventListener('input', (e) => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val)) priceAdjustments[group.name] = val;
+                else delete priceAdjustments[group.name];
+                ui.unsavedWarning.style.display = 'inline-block';
+            });
+            
+            div.appendChild(input);
+        }
+
         container.appendChild(div);
     });
     
@@ -439,7 +469,14 @@ ui.btnSave.addEventListener('click', async () => {
         return;
     }
     
-    await window.zaloAPI.saveConfig(srcArray, destArray);
+    // Clean up empty price adjustments
+    for (const key in priceAdjustments) {
+        if (!sourceSelection.has(key)) {
+            delete priceAdjustments[key];
+        }
+    }
+    
+    await window.zaloAPI.saveConfig(srcArray, destArray, priceAdjustments);
     
     ui.unsavedWarning.style.display = 'none';
     ui.saveStatus.innerText = "Cấu hình Toàn Cầu đã được lưu!";

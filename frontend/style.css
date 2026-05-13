@@ -497,3 +497,25 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #475569; 
 }
+
+/* PRICE OFFSET INPUT */
+.price-offset-input {
+    width: 65px;
+    padding: 4px 6px;
+    margin-left: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #0b1121;
+    color: var(--success);
+    font-size: 12px;
+    text-align: center;
+    outline: none;
+    font-weight: bold;
+}
+.price-offset-input::placeholder {
+    color: #475569;
+    font-weight: normal;
+}
+.price-offset-input:focus {
+    border-color: var(--primary);
+}

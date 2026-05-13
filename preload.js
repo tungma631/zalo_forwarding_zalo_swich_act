@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('zaloAPI', {
     getGroups: (force) => ipcRenderer.invoke('zalo-get-groups', force),
     generateQR: (accountId) => ipcRenderer.invoke('zalo-generate-qr', accountId),
     getConfig: () => ipcRenderer.invoke('zalo-get-config'),
-    saveConfig: (sourceIds, destIds) => ipcRenderer.invoke('zalo-save-config', sourceIds, destIds),
+    saveConfig: (sourceIds, destIds, priceAdjustments) => ipcRenderer.invoke('zalo-save-config', sourceIds, destIds, priceAdjustments),
     toggleStatus: (isEnabled) => ipcRenderer.invoke('zalo-toggle-status', isEnabled),
 
     // Listeners
